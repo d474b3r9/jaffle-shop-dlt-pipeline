@@ -1,2 +1,2 @@
 # jaffle-shop-dlt-pipeline
-jaffle shop pipeline dlt demo
+jaffle shop pipeline dlthub demo
