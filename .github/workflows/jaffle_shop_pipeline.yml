@@ -1,0 +1,109 @@
+name: Jaffle Shop DLT Pipeline
+
+on:
+  schedule:
+    # Run every 6 hours
+    - cron: '0 */6 * * *'
+
+  # Allow manual trigger
+  workflow_dispatch:
+    inputs:
+      log_level:
+        description: 'Log level'
+        required: false
+        default: 'INFO'
+        type: choice
+        options:
+        - DEBUG
+        - INFO
+        - WARNING
+        - ERROR
+
+jobs:
+  run-pipeline:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up Python 3.11
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+        cache: 'pip'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+    - name: Test API connectivity
+      run: |
+        python -c "
+        import requests
+        try:
+            response = requests.get('https://jaffle-shop.scalevector.ai/api/v1/customers?page=1&limit=1', timeout=10)
+            print(f'API Status: {response.status_code}')
+            if response.status_code == 200:
+                print('API is accessible')
+            else:
+                print('API returned non-200 status')
+        except Exception as e:
+            print(f'API connectivity error: {e}')
+        "
+
+    - name: Run DLT Pipeline
+      env:
+        # DLT configuration
+        DLT_DATA_DIR: ${{ github.workspace }}/.dlt
+        RUNTIME__LOG_LEVEL: ${{ github.event.inputs.log_level || 'INFO' }}
+
+        # Performance optimizations
+        EXTRACT__WORKERS: '2'
+        NORMALIZE__WORKERS: '2'
+        LOAD__WORKERS: '2'
+        DATA_WRITER__BUFFER_MAX_ITEMS: '5000'
+
+      run: |
+        echo "Starting pipeline execution..."
+        python jaffle_shop_pipeline.py
+        echo "Pipeline execution completed"
+
+    - name: Check pipeline results
+      run: |
+        echo "Checking generated files..."
+        ls -la
+        if [ -f "jaffle_shop.duckdb" ]; then
+          echo "DuckDB file created successfully"
+          # Show file size
+          du -h jaffle_shop.duckdb
+        else
+          echo "Warning: DuckDB file not found"
+        fi
+        
+        if [ -d ".dlt" ]; then
+          echo "DLT directory contents:"
+          ls -la .dlt/
+        fi
+
+    - name: Upload pipeline artifacts
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: pipeline-results-${{ github.run_number }}
+        path: |
+          *.duckdb
+          .dlt/
+          *.log
+        retention-days: 7
+
+    - name: Pipeline status notification
+      if: always()
+      run: |
+        if [ "${{ job.status }}" == "success" ]; then
+          echo "✅ Pipeline completed successfully"
+        else
+          echo "❌ Pipeline failed"
+          exit 1
+        fi
